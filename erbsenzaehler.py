@@ -85,7 +85,7 @@ tarethreshold = 0.1 # grams
 
 weight = AverageValue(alpha=0.1, fmt="{0:+7.2f} g") # grams
 
-singleweight = AverageValue(fmt="{0:+7.3f} g") # grams
+singleweight = AverageValue(alpha=0.2, fmt="{0:+7.3f} g") # grams
 count = 0
 
 if __name__ == '__main__':
