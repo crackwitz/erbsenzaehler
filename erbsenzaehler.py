@@ -4,16 +4,20 @@ import sys
 import serial
 
 
-def argmin(dictionary, key=None):
-	if not dictionary:
+def argmin(arg, key=None):
+	if not arg:
 		return None
 
 	if key is None:
-		keyfn = lambda k: dictionary[k]
+		keyfn = lambda k: arg[k]
 	else:
-		keyfn = lambda k: key(dictionary[k])
+		keyfn = lambda k: key(arg[k])
 
-	return min(dictionary, key=keyfn)
+	if isinstance(arg, dict):
+		return min(arg, key=keyfn)
+	else:
+		return min(xrange(len(arg)), key=keyfn)
+
 
 class SettlingValue(object):
 	def __init__(self, range=None, threshold=None, history=5):
@@ -95,8 +99,19 @@ class ValueStream(object):
 				continue
 
 class MixedBag(object):
-	def __init__(self, new_factor=0.1):
-		self.new_factor = new_factor
+	# this should be doing a mixture of gaussians
+	# this should keep track of all increments to recompute sigmas
+	# this should recluster on demand or when needed
+
+	# TODO: need a new class to emit increments and track/calibrate otherwise
+
+	def __init__(self, new_abs=0.1, new_rel=0.1):
+		# exactly one candidate category should score within relative range for a count
+		# for best candidate, update / round(count) should match exactly one weight, its own
+		# thresholds to trigger a new category (both need to be overstepped)
+		self.th_abs = new_abs
+		self.th_rel = new_rel
+
 		self.clear()
 
 	def clear(self):
@@ -125,35 +140,44 @@ class MixedBag(object):
 			return sum( w*c for k,(w,c) in enumerate(self) if k in keys)
 
 	def update(self, new_total):
+		# check if it fits into exactly one category
+		# if not, could it be a new category?
+		# otherwise, do nothing
+
+
 		# categorize, or init new category
 		old_total = self.total()
 		update = new_total - old_total
 
-		multiples = {
-			k: update / float(self.weights[k])
-			for k in xrange(self.kinds)
-		}
-
-		# best match in terms of being a full multiple
-		closest = argmin(multiples, key=lambda m: abs(m - round(m)))
-		if closest is None:
-			self.add_kind(update, 1)
-			return
-
 		# update all equally
-		if all(round(multiples[k]) == 0 and abs(multiples[k]) <= self.new_factor for k in multiples):
+		if abs(update) < self.th_abs:
 			factor = new_total / old_total
 			for w in self.weights:
 				w.update(float(w) * factor)
 			return
 
-		dcount = int(round(multiples[closest]))
-		error = multiples[closest] - dcount
+		multiples = [ update / float(w) for w in self.weights ]
+		rel_errors = [abs(m - round(m)) for m in multiples ] # fractional error to nearest multiple
+		abs_errors = [ e * float(w) for e,w in zip(rel_errors, self.weights) ] # how much that really is
 
-		if abs(error) > self.new_factor:
+		if sum(e < self.th_rel for e in rel_errors) > 1:
+			# ambiguous. can't work with that.
+			return
+
+		# best (only) match in terms of being a full multiple
+		closest = argmin(abs_errors)
+		if closest is None:
+			self.add_kind(update, 1)
+			return
+
+		dcount = int(round(multiples[closest]))
+		error_rel = rel_errors[closest]
+		error_abs = abs_errors[closest]
+
+		if error_abs > self.th_abs:
 			if update > 0:
 				self.add_kind(update, 1)
-				return
+			return
 
 		if self.counts[closest] + dcount >= 0:
 			# compute what must be the remainder
@@ -170,7 +194,7 @@ if __name__ == '__main__':
 
 	current = SettlingValue(range=0.1, history=4) # grams
 
-	zero = AverageValue(fmt=u"{0:9.1f}") # in counts
+	zero = AverageValue(alpha=0.02, fmt=u"{0:9.1f}") # in counts
 	tarethreshold = 0.1 # grams
 
 	# usable weight, neq 0
